@@ -218,8 +218,24 @@ function parseTopups(raw: Raw, file: string): FileResult {
 
 const MEMBER_MAP: [string, number][] = [
   ['รหัสสมาชิก', 0], ['ชื่อ (TH)', 1], ['นามสกุล (TH)', 2], ['ชื่อ (EN)', 3], ['นามสกุล (EN)', 4],
-  ['ประเภท', 10], ['สถานะ', 11], ['เลขบัตร', 12], ['วันหมดอายุบัตร', 13],
+  ['สถานะ', 11], ['เลขบัตร', 12], ['วันหมดอายุบัตร', 13],
 ]
+
+/** UPOS Students page export (Nov 2026): 13 columns, "รหัสนักเรียน *" as id, no card-type column. */
+const STUDENT_MAP: [string, number][] = [
+  ['รหัสนักเรียน', 0], ['ชื่อ (TH)', 1], ['นามสกุล (TH)', 2], ['ชื่อ (EN)', 3], ['นามสกุล (EN)', 4],
+  ['รหัสชั้นปี', 5], ['ห้องเรียน', 6], ['อีเมล', 7], ['เบอร์โทร', 8], ['ข้อมูลแพ้อาหาร', 9],
+  ['สถานะ', 11], ['เลขบัตร', 12], ['วันหมดอายุบัตร', 13],
+]
+
+/**
+ * Card type (ประเภทบัตร, column 11) is not in either export. The customer's report groups by it, and
+ * their own file uses STUDENT / MEMBER / VISITOR, where every VISITOR id starts with "SDXTH".
+ */
+const CARD_TYPE_COL = 10
+function memberCardType(id: string): string {
+  return id.toUpperCase().startsWith('SDXTH') ? 'VISITOR' : 'MEMBER'
+}
 
 function parseCards(raw: Raw, file: string): FileResult {
   const res = empty()
@@ -232,6 +248,7 @@ function parseCards(raw: Raw, file: string): FileResult {
   const target = CARD_COLUMNS.map(normCard)
 
   let idxs: number[] // per target column; -1 = fill ''
+  let cardType: ((row: Cell[]) => string) | null = null // set when the file has no ประเภทบัตร column
   if (header.includes(target[0] ?? '')) {
     const missing = CARD_COLUMNS.filter((_, i) => !header.includes(target[i] ?? ''))
     if (missing.length > 0) {
@@ -239,6 +256,15 @@ function parseCards(raw: Raw, file: string): FileResult {
       return res
     }
     idxs = target.map((t) => header.indexOf(t))
+  } else if (header.includes('รหัสนักเรียน')) {
+    const missing = STUDENT_MAP.filter(([n]) => !header.includes(n)).map(([n]) => n)
+    if (missing.length > 0) {
+      res.errors.push({ code: 'HEADER_NOT_FOUND', params: { file, missing: missing.join(', ') } })
+      return res
+    }
+    idxs = CARD_COLUMNS.map(() => -1)
+    for (const [n, t] of STUDENT_MAP) idxs[t] = header.indexOf(n)
+    cardType = () => 'STUDENT'
   } else if (header.includes('รหัสสมาชิก')) {
     const missing = MEMBER_MAP.filter(([n]) => !header.includes(n)).map(([n]) => n)
     if (missing.length > 0) {
@@ -247,6 +273,7 @@ function parseCards(raw: Raw, file: string): FileResult {
     }
     idxs = CARD_COLUMNS.map(() => -1)
     for (const [n, t] of MEMBER_MAP) idxs[t] = header.indexOf(n)
+    cardType = (row) => memberCardType(String(row[0]))
     res.warnings.push({ code: 'MEMBER_FILE_MAPPED', params: { file } })
   } else {
     res.errors.push({ code: 'HEADER_NOT_FOUND', params: { file, missing: CARD_COLUMNS[0] } })
@@ -256,7 +283,9 @@ function parseCards(raw: Raw, file: string): FileResult {
   for (let i = h + 1; i < raw.length; i++) {
     const r = raw[i] ?? []
     if (isEmptyRow(r)) continue
-    res.rows.push(idxs.map((ix) => (ix < 0 ? '' : toCell(r[ix]))))
+    const row = idxs.map((ix) => (ix < 0 ? '' : toCell(r[ix])))
+    if (cardType) row[CARD_TYPE_COL] = cardType(row)
+    res.rows.push(row)
   }
   return res
 }

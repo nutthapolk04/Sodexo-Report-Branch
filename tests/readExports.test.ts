@@ -186,6 +186,18 @@ describe('topups', () => {
 })
 
 describe('cards', () => {
+  test('Nov 2026 student export (13 columns, รหัสนักเรียน *) maps to 14 columns with STUDENT type', () => {
+    const header = ['รหัสนักเรียน *', 'ชื่อ (TH) *', 'นามสกุล (TH) *', 'ชื่อ (EN) *', 'นามสกุล (EN) *', 'รหัสชั้นปี', 'ห้องเรียน', 'อีเมล', 'เบอร์โทร', 'ข้อมูลแพ้อาหาร', 'สถานะ', 'เลขบัตร', 'วันหมดอายุบัตร']
+    const s = readSlot('cards', [xlsx('students.xlsx', [header, ['STU001', 'ก', 'ข', 'A', 'B', 'Y7', '7A', '', '', 'นม', 'ใช้งาน', '0000000001', '']])], OPTS)
+    expect(s.errors).toEqual([])
+    expect(s.warnings).toEqual([])
+    expect(s.rows[0]).toEqual(['STU001', 'ก', 'ข', 'A', 'B', 'Y7', '7A', '', '', 'นม', 'STUDENT', 'ใช้งาน', '0000000001', ''])
+  })
+  test('member export: card type MEMBER, SDXTH ids become VISITOR', () => {
+    const header = ['รหัสสมาชิก *', 'ชื่อ (TH) *', 'นามสกุล (TH) *', 'ชื่อ (EN) *', 'นามสกุล (EN) *', 'ประเภท', 'สถานะ', 'เลขบัตร', 'วันหมดอายุบัตร']
+    const s = readSlot('cards', [xlsx('members.xlsx', [header, ['M001', 'ค', 'ง', 'C', 'D', 'สมาชิก', 'ใช้งาน', '1', ''], ['SDXTH000001', 'Visitor', '1', 'Visitor', '1', 'สมาชิก', 'ใช้งาน', '2', '']])], OPTS)
+    expect(s.rows.map((r) => r[10])).toEqual(['MEMBER', 'VISITOR'])
+  })
   test('14-col, header row 1, org null', () => {
     const f = xlsx('c.xlsx', [CARD_H, cRow('S1', 'สมชาย', 'ใจดี', 'Somchai', 'Jaidee')])
     const s = readSlot('cards', [f], OPTS)
@@ -203,7 +215,7 @@ describe('cards', () => {
     const s = readSlot('cards', [f], OPTS)
     expect(s.errors).toEqual([])
     expect(s.warnings.some((w) => w.code === 'MEMBER_FILE_MAPPED')).toBe(true)
-    expect(s.rows[0]).toEqual(['M1', 'ครู', 'เอ', 'Teacher', 'A', '', '', '', '', '', 'ครู', 'ใช้งาน', '999', '01/01/2030'])
+    expect(s.rows[0]).toEqual(['M1', 'ครู', 'เอ', 'Teacher', 'A', '', '', '', '', '', 'MEMBER', 'ใช้งาน', '999', '01/01/2030'])
   })
 
   test('students + members merged', () => {
