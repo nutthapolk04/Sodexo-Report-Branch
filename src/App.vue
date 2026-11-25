@@ -11,6 +11,9 @@ import BuildProgress from './components/BuildProgress.vue'
 import DoneView, { type DoneSummary } from './components/DoneView.vue'
 
 type View = 'form' | 'building' | 'done' | 'failed'
+/** Upload slots. Students + members are two zones that both feed the WalletCards table. */
+type SrcKey = 'students' | 'members' | 'topups' | 'items'
+const SRC_KEYS: SrcKey[] = ['students', 'members', 'topups', 'items']
 type AnyIssue = { level: 'error'; issue: Issue<ErrorCode> } | { level: 'warning'; issue: Issue<WarningCode> }
 
 const { lang, setLang, t } = useI18n()
@@ -19,11 +22,14 @@ const { lang, setLang, t } = useI18n()
 const view = ref<View>('form')
 const templateFile = shallowRef<InputFile | null>(null)
 const templateInfo = shallowRef<TemplateInfo | null>(null)
-const inputs = shallowRef<Record<TableKey, InputFile[]>>({ cards: [], topups: [], items: [] })
+const inputs = shallowRef<Record<SrcKey, InputFile[]>>({ students: [], members: [], topups: [], items: [] })
+/** Per-zone parse results (students/members parsed as 'cards'). */
+const zones = shallowRef<Partial<Record<SrcKey, ParsedSlot>>>({})
+/** Table-level results used for crossCheck and build; cards = students + members merged. */
 const slots = shallowRef<Partial<Record<TableKey, ParsedSlot>>>({})
 const replaceEmDash = ref(true)
 const dedupe = ref(true)
-const busy = ref<Record<TableKey | 'template', boolean>>({ template: false, cards: false, topups: false, items: false })
+const busy = ref<Record<SrcKey | 'template', boolean>>({ template: false, students: false, members: false, topups: false, items: false })
 
 const buildStep = ref(0)
 const buildDetail = ref('')
@@ -51,22 +57,53 @@ function failedSlot(kind: TableKey, files: InputFile[]): ParsedSlot {
   }
 }
 
-function parseKind(kind: TableKey): void {
-  const files = inputs.value[kind]
-  const next = { ...slots.value }
-  if (files.length === 0) {
-    delete next[kind]
-  } else {
-    try {
-      next[kind] = readSlot(kind, files, options())
-    } catch {
-      next[kind] = failedSlot(kind, files)
-    }
+function safeRead(kind: TableKey, files: InputFile[]): ParsedSlot {
+  try {
+    return readSlot(kind, files, options())
+  } catch {
+    return failedSlot(kind, files)
   }
+}
+
+const tableOf = (key: SrcKey): TableKey => (key === 'students' || key === 'members' ? 'cards' : key)
+
+/** Students zone must not hold the 9-column member list, Members zone must not hold the 14-column student list. */
+function checkCardZone(key: 'students' | 'members', slot: ParsedSlot): ParsedSlot {
+  if (slot.errors.length > 0) return slot
+  const mapped = new Set(slot.warnings.filter((w) => w.code === 'MEMBER_FILE_MAPPED').map((w) => String(w.params?.file ?? '')))
+  const wrong =
+    key === 'students' ? slot.files.filter((f) => mapped.has(f)) : slot.files.filter((f) => !mapped.has(f))
+  if (wrong.length === 0) return { ...slot, warnings: slot.warnings.filter((w) => w.code !== 'MEMBER_FILE_MAPPED') }
+  const code = key === 'students' ? 'MEMBER_FILE_IN_STUDENTS' : 'STUDENT_FILE_IN_MEMBERS'
+  return { ...slot, errors: wrong.map((file) => ({ code, params: { file } })) }
+}
+
+function parseKind(key: SrcKey): void {
+  const files = inputs.value[key]
+  const nextZones = { ...zones.value }
+  if (files.length === 0) delete nextZones[key]
+  else {
+    const parsed = safeRead(tableOf(key), files)
+    nextZones[key] = key === 'students' || key === 'members' ? checkCardZone(key, parsed) : parsed
+  }
+  zones.value = nextZones
+
+  const next = { ...slots.value }
+  const table = tableOf(key)
+  if (table === 'cards') {
+    const all = [...inputs.value.students, ...inputs.value.members]
+    if (all.length === 0) delete next.cards
+    else {
+      const merged = safeRead('cards', all)
+      // member-file mapping is expected now that members have their own slot
+      next.cards = { ...merged, warnings: merged.warnings.filter((w) => w.code !== 'MEMBER_FILE_MAPPED') }
+    }
+  } else if (nextZones[key]) next[table] = nextZones[key]
+  else delete next[table]
   slots.value = next
 }
 
-async function addFiles(kind: TableKey, picked: File[]): Promise<void> {
+async function addFiles(kind: SrcKey, picked: File[]): Promise<void> {
   busy.value[kind] = true
   try {
     const loaded: InputFile[] = []
@@ -108,7 +145,7 @@ async function addTemplate(picked: File[]): Promise<void> {
   }
 }
 
-function removeKind(kind: TableKey): void {
+function removeKind(kind: SrcKey): void {
   inputs.value = { ...inputs.value, [kind]: [] }
   parseKind(kind)
 }
@@ -127,7 +164,8 @@ function clearAll(): void {
   revokeResult()
   templateFile.value = null
   templateInfo.value = null
-  inputs.value = { cards: [], topups: [], items: [] }
+  inputs.value = { students: [], members: [], topups: [], items: [] }
+  zones.value = {}
   slots.value = {}
 }
 
@@ -137,8 +175,7 @@ function startOver(): void {
 }
 
 watch([replaceEmDash, dedupe], async () => {
-  const kinds: TableKey[] = ['cards', 'topups', 'items']
-  const active = kinds.filter((k) => inputs.value[k].length > 0)
+  const active = SRC_KEYS.filter((k) => inputs.value[k].length > 0)
   if (active.length === 0) return
   for (const k of active) busy.value[k] = true
   await nextTick()
@@ -168,7 +205,7 @@ function issueText(prefix: 'err' | 'warn', issue: Issue<string>): string {
 const allIssues = computed<AnyIssue[]>(() => {
   const out: AnyIssue[] = []
   for (const e of templateInfo.value?.errors ?? []) out.push({ level: 'error', issue: e })
-  for (const s of Object.values(slots.value)) {
+  for (const s of [...Object.values(zones.value), ...Object.values(slots.value)]) {
     for (const e of s.errors) out.push({ level: 'error', issue: e })
   }
   for (const e of cross.value.errors) out.push({ level: 'error', issue: e })
@@ -199,12 +236,12 @@ const hasWarnings = computed(() => allIssues.value.some((i) => i.level === 'warn
 const canBuild = computed(
   () =>
     templateInfo.value !== null &&
-    Boolean(slots.value.cards && slots.value.topups && slots.value.items) &&
+    Boolean(zones.value.students && zones.value.members && slots.value.cards && slots.value.topups && slots.value.items) &&
     !hasErrors.value,
 )
 
 const anyLoaded = computed(
-  () => templateFile.value !== null || inputs.value.cards.length + inputs.value.topups.length + inputs.value.items.length > 0,
+  () => templateFile.value !== null || SRC_KEYS.some((k) => inputs.value[k].length > 0),
 )
 
 function joinList(items: string[]): string {
@@ -212,14 +249,14 @@ function joinList(items: string[]): string {
   return items.slice(0, -1).join(', ') + t('tpl.and') + items[items.length - 1]
 }
 
-function slotZone(kind: TableKey): { status: ZoneStatus; names: string[]; summary: string; message: string } {
+function slotZone(kind: SrcKey): { status: ZoneStatus; names: string[]; summary: string; message: string } {
   void lang.value
   const names = inputs.value[kind].map((f) => f.name)
-  const s = slots.value[kind]
+  const s = zones.value[kind]
   if (!s) return { status: 'empty', names, summary: '', message: '' }
   const dash = (v: string | null): string => v ?? '-'
   let summary = ''
-  if (kind === 'cards') summary = t('cards.summary', { n: s.rows.length.toLocaleString('en-US') })
+  if (kind === 'students' || kind === 'members') summary = t('cards.summary', { n: s.rows.length.toLocaleString('en-US') })
   else if (kind === 'topups')
     summary = t('topups.summary', { n: s.rows.length.toLocaleString('en-US'), from: dash(s.from), to: dash(s.to), org: dash(s.org) })
   else
@@ -249,7 +286,8 @@ const templateZone = computed(() => {
   return { status: 'ok' as ZoneStatus, names, summary, message: '' }
 })
 
-const cardsZone = computed(() => slotZone('cards'))
+const studentsZone = computed(() => slotZone('students'))
+const membersZone = computed(() => slotZone('members'))
 const topupsZone = computed(() => slotZone('topups'))
 const itemsZone = computed(() => slotZone('items'))
 
@@ -329,6 +367,7 @@ const duplicateMessage = computed(() => {
 
       <div class="grid">
         <DropZone
+          class="grid__full"
           :title="t('tpl.title')"
           :hint="t('tpl.hint')"
           accept=".xlsm,.xlsx"
@@ -341,17 +380,30 @@ const duplicateMessage = computed(() => {
           @remove="removeTemplate"
         />
         <DropZone
-          :title="t('cards.title')"
-          :hint="t('cards.hint')"
+          :title="t('students.title')"
+          :hint="t('students.hint')"
           accept=".xlsx,.xls"
           multiple
-          :status="cardsZone.status"
-          :file-names="cardsZone.names"
-          :summary="cardsZone.summary"
-          :message="cardsZone.message"
-          :busy="busy.cards"
-          @files="(f) => addFiles('cards', f)"
-          @remove="removeKind('cards')"
+          :status="studentsZone.status"
+          :file-names="studentsZone.names"
+          :summary="studentsZone.summary"
+          :message="studentsZone.message"
+          :busy="busy.students"
+          @files="(f) => addFiles('students', f)"
+          @remove="removeKind('students')"
+        />
+        <DropZone
+          :title="t('members.title')"
+          :hint="t('members.hint')"
+          accept=".xlsx,.xls"
+          multiple
+          :status="membersZone.status"
+          :file-names="membersZone.names"
+          :summary="membersZone.summary"
+          :message="membersZone.message"
+          :busy="busy.members"
+          @files="(f) => addFiles('members', f)"
+          @remove="removeKind('members')"
         />
         <DropZone
           :title="t('topups.title')"
@@ -430,6 +482,7 @@ const duplicateMessage = computed(() => {
 .main__title { margin: 0; font-size: 1.75rem; line-height: 1.3; }
 .main__intro { margin: -8px 0 0; color: var(--muted); max-width: 70ch; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid__full { grid-column: 1 / -1; }
 @media (max-width: 639px) { .grid { grid-template-columns: 1fr; } }
 .opts { margin: 0; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
 .opts legend { padding: 0 6px; font-weight: 600; }

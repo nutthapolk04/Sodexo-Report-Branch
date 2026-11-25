@@ -44,6 +44,8 @@ export type ErrorCode =
   | 'TOPUP_NOT_ENGLISH'
   | 'ORG_MISMATCH'
   | 'TEMPLATE_TABLE_MISSING'
+  | 'MEMBER_FILE_IN_STUDENTS' // 9-column member list dropped in the Students slot
+  | 'STUDENT_FILE_IN_MEMBERS' // 14-column student list dropped in the Members slot
 
 export type WarningCode =
   | 'DATE_GAP'          // gap between merged Sales files' date ranges
