@@ -158,6 +158,16 @@ describe('items', () => {
 })
 
 describe('topups', () => {
+  test('Nov 2026 layout: Transaction Ref aliased, missing Type filled, 11 columns in template order', () => {
+    const header = ['Date/Time', 'Transaction Ref', 'Card ID', 'Device', 'Topped Up By', 'Student ID', 'Recipient', 'Wallet Type', 'Payment Method', 'Amount']
+    const row = ['01/09/2026, 08:00', 'TQ20990101-0001', '0000000001', 'Kiosk', 'kiosk kiosk', 'STU000001', 'Test Student', 'WAL', 'QR PromptPay', 2000]
+    const s = readSlot('topups', [topupFile('new.xlsx', 'DCI', [row], header)], OPTS)
+    expect(s.errors).toEqual([])
+    expect(s.rows[0]).toEqual(['01/09/2026, 08:00', 'TQ20990101-0001', '0000000001', '-', 'Kiosk', 'kiosk kiosk', 'STU000001', 'Test Student', 'WAL', 'QR PromptPay', 2000])
+    expect(s.rows[0][6]).toBe('STU000001')
+    expect(s.rows[0][9]).toBe('QR PromptPay')
+    expect(s.warnings.map((w) => w.code)).toContain('MISSING_OPTIONAL_COLUMNS')
+  })
   test('reads, parses org, sorts by date/time', () => {
     const f = topupFile('t.xlsx', 'DCI', [tRow('26/10/2026, 08:00', 'R2'), tRow('25/10/2026, 20:28', 'R1')])
     const s = readSlot('topups', [f], OPTS)

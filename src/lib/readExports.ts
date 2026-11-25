@@ -106,6 +106,8 @@ const empty = (): FileResult => ({ rows: [], org: null, from: null, to: null, er
 // ---------- per-kind file parsers ----------
 
 const OPTIONAL_ITEM = ['เคาน์เตอร์', 'หมายเหตุการชำระเงิน', 'ประเภทผู้ใช้']
+const OPTIONAL_TOPUP: string[] = ['Type']
+const TOPUP_ALIASES: Record<string, string> = { 'Receipt No.': 'Transaction Ref' }
 
 function parseItems(raw: Raw, file: string): FileResult {
   const res = empty()
@@ -176,23 +178,35 @@ function parseTopups(raw: Raw, file: string): FileResult {
     res.errors.push({ code: 'TOPUP_NOT_ENGLISH', params: { file } })
     return res
   }
-  const h = findHeaderRow(raw, (c) => c.includes('Date/Time') && c.includes('Receipt No.'))
+  const h = findHeaderRow(raw, (c) => c.includes('Date/Time') && (c.includes('Receipt No.') || c.includes('Transaction Ref')))
   if (h < 0) {
     res.errors.push({ code: 'HEADER_NOT_FOUND', params: { file, missing: TOPUP_COLUMNS.join(', ') } })
     return res
   }
   const header = (raw[h] ?? []).map(norm)
-  const missing = TOPUP_COLUMNS.filter((c) => !header.includes(c))
+  // Newer UPOS exports (Nov 2026) rename "Receipt No." to "Transaction Ref" and drop "Type".
+  // The template reads WalletTopups by column POSITION (1, 7, 10, 11), so all 11 columns must still be written in order.
+  const colIndex = (c: string): number => {
+    const i = header.indexOf(c)
+    if (i >= 0) return i
+    const alias = TOPUP_ALIASES[c]
+    return alias ? header.indexOf(alias) : -1
+  }
+  const missing = TOPUP_COLUMNS.filter((c) => colIndex(c) < 0 && !OPTIONAL_TOPUP.includes(c))
   if (missing.length > 0) {
     res.errors.push({ code: 'HEADER_NOT_FOUND', params: { file, missing: missing.join(', ') } })
     return res
   }
-  const idxs = TOPUP_COLUMNS.map((c) => header.indexOf(c))
+  const idxs = TOPUP_COLUMNS.map(colIndex)
+  const missingOpt = TOPUP_COLUMNS.filter((_c, k) => idxs[k] < 0)
+  if (missingOpt.length > 0) {
+    res.warnings.push({ code: 'MISSING_OPTIONAL_COLUMNS', params: { file, columns: missingOpt.join(', ') } })
+  }
   const dates: (number | null)[] = []
   for (let i = h + 1; i < raw.length; i++) {
     const r = raw[i] ?? []
     if (isEmptyRow(r)) continue
-    const row = idxs.map((ix) => toCell(r[ix]))
+    const row = idxs.map((ix) => (ix < 0 ? '-' : toCell(r[ix])))
     res.rows.push(row)
     dates.push(parseDmy(String(row[0]).split(',')[0]))
   }
