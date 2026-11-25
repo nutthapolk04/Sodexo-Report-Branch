@@ -34,7 +34,7 @@ function topupSheet(): string {
 }
 
 function calcCell(col: string, r: number): string {
-  return `<c r="${col}${r}" t="str" cm="1"><f t="array" ref="${col}${r}">_xlfn.LET(x,1,x)</f><v>DCBK000147</v></c>`
+  return `<c r="${col}${r}" t="str" cm="1"><f t="array" ref="${col}${r}">_xlfn.LET(x,1,x)</f><v>STU999999</v></c>`
 }
 
 function itemSheet(): string {
@@ -162,7 +162,7 @@ describe('fillTemplate', () => {
       expect(x).toContain(`<c r="AG${r}" t="str" cm="1"><f t="array" ref="AG${r}">_xlfn.LET(x,1,x)</f><v></v></c>`)
       expect(x).toContain(`<c r="AH${r}" t="str" cm="1"><f t="array" ref="AH${r}">_xlfn.LET(y,2,y)</f><v></v></c>`)
     }
-    expect(x).not.toContain('DCBK000147')
+    expect(x).not.toContain('STU999999')
     expect(x).toContain('<row r="9" spans="1:34" ht="15">')
   })
 
